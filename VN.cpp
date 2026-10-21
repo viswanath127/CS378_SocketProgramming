@@ -51,9 +51,9 @@ void printnb(vector<nb> neighbours) {
         char ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &item.ip_addr, ip_str, INET_ADDRSTRLEN);
 
-        cout << "Node: " << item.id << " | IP: " << ip_str 
-             << " | Port: " << ntohs(item.UDP_Port) 
-             << " | Cost: " << ntohs(item.cost) << endl;
+        cout << "Node: " << item.id << " IP: " << ip_str 
+             << " Port: " << ntohs(item.UDP_Port) 
+             << " Cost: " << ntohs(item.cost) << endl;
     }
 }
 
@@ -69,7 +69,7 @@ void decode_LSP(const char* buffer, ssize_t len) {
 
     if (len < (ssize_t)(sizeof(LSP_HDR) + num_nbs * sizeof(nb))) return;
 
-    cout << "\n>>> [LSP Received] From Node: " << origin << " | SeqNum: " << seq << " <<<" << endl;
+    cout << "\n----[LSP Received] From Node: " << origin << " SeqNum: " << seq << " <<<" << endl;
 
     const char* payload_ptr = buffer + sizeof(LSP_HDR);
     for (uint16_t i = 0; i < num_nbs; ++i) {
@@ -80,9 +80,9 @@ void decode_LSP(const char* buffer, ssize_t len) {
         inet_ntop(AF_INET, &tuple.ip_addr, ip_str, INET_ADDRSTRLEN);
 
         cout << "   Neighbor: " << tuple.id 
-             << " | IP: " << ip_str 
-             << " | Port: " << ntohs(tuple.UDP_Port) 
-             << " | Cost: " << ntohs(tuple.cost) << endl;
+             << " IP: " << ip_str 
+             << " Port: " << ntohs(tuple.UDP_Port) 
+             << " Cost: " << ntohs(tuple.cost) << endl;
     }
 }
 
@@ -116,13 +116,14 @@ class V_Node {
             udp_s = socket(AF_INET, SOCK_DGRAM, 0);
             vn_addr.sin_family = AF_INET;
             vn_addr.sin_port = htons(udp_port);
+            inet_pton(AF_INET, ip_addr.c_str(), &vn_addr.sin_addr);
 
             if (bind(udp_s, (struct sockaddr*)&vn_addr, sizeof(vn_addr)) < 0) {
                 cerr << "Error binding UDP socket\n";
             }
 
             // Set socket address structure for connect message
-            inet_pton(AF_INET, ip_addr.c_str(), &vn_addr.sin_addr);
+            
         }
 
         void make_tcp_connection() {
@@ -151,7 +152,7 @@ class V_Node {
             cout << "CONNECT message sent.\n";
         }
 
-        void recv_LSM(int f = MSG_DONTWAIT) {
+        bool recv_LSM(int f = MSG_DONTWAIT) {
             char buffer[1024] = {0};
             ssize_t bytes_recv = recv(tcp_s, buffer, sizeof(buffer), f);
 
@@ -166,9 +167,12 @@ class V_Node {
                 }
 
                 printnb(neighbours);
+                return true;
             } else if (f == 0 && bytes_recv <= 0) {
                 cerr << "Failed to receive initial LINK-STATE message.\n";
             }
+
+            return false;
         }
 
         void send_LSP() {
@@ -184,27 +188,24 @@ class V_Node {
 
             // 2. Unicast to each neighbor
             for (const auto& neighbor : neighbours) {
-                // Skip sending to self (self entry has cost == 0)
                 if (ntohs(neighbor.cost) == 0) continue;
 
                 sockaddr_in dest_addr;
                 memset(&dest_addr, 0, sizeof(dest_addr));
                 dest_addr.sin_family = AF_INET;
-                dest_addr.sin_addr.s_addr = neighbor.ip_addr; // Already in Network Byte Order
-                dest_addr.sin_port = neighbor.UDP_Port;       // Already in Network Byte Order
+                dest_addr.sin_addr.s_addr = neighbor.ip_addr;
+                dest_addr.sin_port = neighbor.UDP_Port;
 
-                // Send twice for UDP reliability (Requirement 5)
-                for (int retry = 0; retry < 2; ++retry) {
+                // for (int r = 0; r < 2; r++) {
                     sendto(udp_s, packet.data(), packet.size(), 0, 
                            (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-                }
+                // }
             }
 
-            cout << "[LSP Broadcast] Sent seq " << seq_n << " from Node " << id << endl;
+            cout << " LSP Sent seq " << seq_n << " from Node " << id << endl;
             seq_n++;
         }           
 
-        // Non-blocking reception of incoming UDP LSPs from neighbors
         void recv_LSP() {
             char buffer[2048] = {0};
             sockaddr_in src_addr;
@@ -237,9 +238,21 @@ int main(int argc, char* argv[]) {
     VN.make_tcp_connection();
     VN.send_connect();
     VN.recv_LSM(0);
+
+    auto lsp_sent_l = chrono::steady_clock::now();
+    VN.send_LSP();
+    VN.recv_LSP();
+
     while (1) {
-        VN.recv_LSM();
-        VN.send_LSP();
+        bool lsm_recv = VN.recv_LSM();
+        auto now = chrono::steady_clock::now();
+        auto elapsed_sec = chrono::duration_cast<chrono::seconds>(now - lsp_sent_l).count();
+
+        if (lsm_recv || elapsed_sec >= 15) {
+            VN.send_LSP();
+            lsp_sent_l = now;
+        }
+
         VN.recv_LSP();
     }
 
