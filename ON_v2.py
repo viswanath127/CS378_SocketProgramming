@@ -39,54 +39,49 @@ virtual_nodes = [None] * N_VN
 connection_sockets = [None] * N_VN
 # print(virtual_nodes)
 
-server_addr = "0"
-server_port_no = 5000
+def get_sys_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 80))
+        ip_addr = s.getsockname()[0]
+    except Exception:
+        ip_addr = socket.gethostbyname(socket.gethostname())
+    finally:
+        s.close()
+    return ip_addr
+server_addr = get_sys_ip()
 
-server_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+print(server_addr)
+# server_port_no = 5000
 
-server_socket.bind((server_addr,server_port_no))
+# server_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
-server_socket.listen(26)
+# server_socket.bind((server_addr,server_port_no))
 
-def decode_from_binary_to_clientaddr(bytes):
-    client_addr
-    port_no
-    return (client_addr, port_no)
+# server_socket.listen(26)
 
-# def send_LS_message():
+# def decode_from_binary_to_clientaddr(bytes):
+#     client_addr
+#     port_no
+#     return (client_addr, port_no)
 
-def encode_LS_message():
+# # def send_LS_message():
 
-for i in range(N_VN):
-    conn_socket, client_addr = server_socket.accept()
-    connection_sockets[i] = conn_socket
+# def encode_LS_message():
 
-    received_bytes = conn_socket.recv(1024)
+# for i in range(N_VN):
+#     conn_socket, client_addr = server_socket.accept()
+#     connection_sockets[i] = conn_socket
 
-    virtual_nodes[i] = decode_from_binary_to_clientaddr(received_bytes)
+#     received_bytes = conn_socket.recv(1024)
 
-for i in range(N_VN):
-    LS_message = []
-    for j in range(N_VN):
-        if adj_matrix[i][j]>=0 :
-            LS_message.append((i,virtual_nodes[i][0], virtual_nodes[i][1],adj_matrix[i][j]))
-    encoded_LS_message = encode_LS_message(LS_message)
+#     virtual_nodes[i] = decode_from_binary_to_clientaddr(received_bytes)
 
-    connection_sockets[i].sendall(encode_LS_message)
+# for i in range(N_VN):
+#     LS_message = []
+#     for j in range(N_VN):
+#         if adj_matrix[i][j]>=0 :
+#             LS_message.append((i,virtual_nodes[i][0], virtual_nodes[i][1],adj_matrix[i][j]))
+#     encoded_LS_message = encode_LS_message(LS_message)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#     connection_sockets[i].sendall(encode_LS_message)
