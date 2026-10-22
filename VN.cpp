@@ -11,7 +11,6 @@
 
 using namespace std;
 
-// Disable padding for binary network structures
 #pragma pack(push, 1)
 struct nb {
     char id;
@@ -69,7 +68,7 @@ void decode_LSP(const char* buffer, ssize_t len) {
 
     if (len < (ssize_t)(sizeof(LSP_HDR) + num_nbs * sizeof(nb))) return;
 
-    cout << "\n----[LSP Received] From Node: " << origin << " SeqNum: " << seq << " <<<" << endl;
+    cout << "\n----[LSP Received] From Node: " << origin << " SeqNum: " << seq << " ----" << endl;
 
     const char* payload_ptr = buffer + sizeof(LSP_HDR);
     for (uint16_t i = 0; i < num_nbs; ++i) {
@@ -121,9 +120,6 @@ class V_Node {
             if (bind(udp_s, (struct sockaddr*)&vn_addr, sizeof(vn_addr)) < 0) {
                 cerr << "Error binding UDP socket\n";
             }
-
-            // Set socket address structure for connect message
-            
         }
 
         void make_tcp_connection() {
@@ -186,19 +182,18 @@ class V_Node {
             memcpy(packet.data(), &hdr, sizeof(LSP_HDR));
             memcpy(packet.data() + sizeof(LSP_HDR), neighbours.data(), neighbours.size() * sizeof(nb));
 
-            // 2. Unicast to each neighbor
-            for (const auto& neighbor : neighbours) {
-                if (ntohs(neighbor.cost) == 0) continue;
+            for (const auto& nbr : neighbours) {
+                if (ntohs(nbr.cost) == 0) continue;
 
-                sockaddr_in dest_addr;
-                memset(&dest_addr, 0, sizeof(dest_addr));
-                dest_addr.sin_family = AF_INET;
-                dest_addr.sin_addr.s_addr = neighbor.ip_addr;
-                dest_addr.sin_port = neighbor.UDP_Port;
+                sockaddr_in dst_addr;
+                memset(&dst_addr, 0, sizeof(dst_addr));
+                dst_addr.sin_family = AF_INET;
+                dst_addr.sin_addr.s_addr = nbr.ip_addr;
+                dst_addr.sin_port = nbr.UDP_Port;
 
                 // for (int r = 0; r < 2; r++) {
                     sendto(udp_s, packet.data(), packet.size(), 0, 
-                           (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+                           (struct sockaddr*)&dst_addr, sizeof(dst_addr));
                 // }
             }
 
@@ -207,7 +202,7 @@ class V_Node {
         }           
 
         void recv_LSP() {
-            char buffer[2048] = {0};
+            char buffer[1024] = {0};
             sockaddr_in src_addr;
             socklen_t addr_len = sizeof(src_addr);
 
