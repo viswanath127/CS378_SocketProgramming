@@ -31,16 +31,32 @@ struct LSP_HDR {
 };
 #pragma pack(pop)
 
-vector<nb> decode_LSM(string msg) {
+vector<nb> decode_LSM(string msg, char& id, vector<vector<int>>& graph) {
     vector<nb> neighbours;
     size_t tuple_size = sizeof(nb);
     size_t tuple_count = msg.size() / tuple_size;
 
-    for (size_t i = 0; i < tuple_count; ++i) {
+    nb self;
+    memcpy(&self, msg.data(), tuple_size);
+    neighbours.push_back(self);
+    id = self.id;
+
+    for(int i=0; i<26; i++) {
+        graph[i][id - 'A'] = -1;
+        graph[id - 'A'][i] = -1;
+    }
+
+    for (size_t i = 1; i < tuple_count; ++i) {
         nb tuple;
         memcpy(&tuple, msg.data() + (i * tuple_size), tuple_size);
         neighbours.push_back(tuple);
+        graph[tuple.id - 'A'][id - 'A'] = ntohs(tuple.cost);
+        graph[id - 'A'][tuple.id - 'A'] = ntohs(tuple.cost);
     }
+
+    graph[id - 'A'][id - 'A'] = 0;
+    graph[id - 'A'][id - 'A'] = 0;
+
     return neighbours;
 }
 
@@ -56,19 +72,31 @@ void printnb(vector<nb> neighbours) {
     }
 }
 
-void decode_LSP(const char* buffer, ssize_t len) {
-    if (len < (ssize_t)sizeof(LSP_HDR)) return;
+bool decode_LSP(const char* buffer, ssize_t len, vector<int>& l_seq, vector<vector<int>>& graph, int& max_vn) {
+    if (len < (ssize_t)sizeof(LSP_HDR)) return false;
 
     LSP_HDR hdr;
     memcpy(&hdr, buffer, sizeof(LSP_HDR));
 
     char origin = hdr.origin_id;
-    uint32_t seq = ntohl(hdr.seqnum);
+    long long seq = ntohl(hdr.seqnum);
     uint16_t num_nbs = ntohs(hdr.num_nbs);
 
-    if (len < (ssize_t)(sizeof(LSP_HDR) + num_nbs * sizeof(nb))) return;
+    if (len < (ssize_t)(sizeof(LSP_HDR) + num_nbs * sizeof(nb))) return false;
 
-    cout << "\n----[LSP Received] From Node: " << origin << " SeqNum: " << seq << " ----" << endl;
+    cout << "\n----[LSP Received] From Node: " << origin << " SeqNum: " << seq << " ----\n";
+
+    if(l_seq[origin - 'A'] >= seq) {
+        cout << "Old Packet received. DISCARDING...\n";
+        return false;
+    } else {
+        l_seq[origin - 'A'] = seq;
+    }
+
+    for(int i=0; i<26; i++) {
+        graph[i][origin - 'A'] = -1;
+        graph[origin - 'A'][i] = -1;
+    }
 
     const char* payload_ptr = buffer + sizeof(LSP_HDR);
     for (uint16_t i = 0; i < num_nbs; ++i) {
@@ -78,11 +106,17 @@ void decode_LSP(const char* buffer, ssize_t len) {
         char ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &tuple.ip_addr, ip_str, INET_ADDRSTRLEN);
 
-        cout << "   Neighbor: " << tuple.id 
+        if(tuple.id - 'A' + 1 > max_vn) max_vn = tuple.id - 'A' + 1;
+        cout << "    Neighbor: " << tuple.id 
              << " IP: " << ip_str 
              << " Port: " << ntohs(tuple.UDP_Port) 
              << " Cost: " << ntohs(tuple.cost) << endl;
+
+        graph[tuple.id - 'A'][origin - 'A'] = ntohs(tuple.cost);
+        graph[origin - 'A'][tuple.id - 'A'] = ntohs(tuple.cost);
     }
+
+    return true;
 }
 
 class V_Node {
@@ -100,8 +134,15 @@ class V_Node {
         sockaddr_in on_addr;
         
     public:
+        int total_vn;
+        vector<vector<int>> graph;
+        vector<int> last_seq_no;
+
         V_Node(string ip_on, int udp_port, string ip = "") {
             seq_n = 0;
+            total_vn = 0;
+            graph = vector<vector<int>>(26, vector<int>(26, -1));
+            last_seq_no = vector<int>(26, -1);
             ON_ipaddr = ip_on;
             UDP_port = udp_port;
             id = '?';
@@ -154,7 +195,7 @@ class V_Node {
 
             if (bytes_recv > 0) {
                 string raw_msg(buffer, bytes_recv);
-                neighbours = decode_LSM(raw_msg);
+                neighbours = decode_LSM(raw_msg, id, graph);
 
                 for (const auto& item : neighbours) {
                     if (ntohs(item.cost) == 0) {
@@ -210,7 +251,42 @@ class V_Node {
                                           (struct sockaddr*)&src_addr, &addr_len);
 
             if (bytes_recv > 0) {
-                decode_LSP(buffer, bytes_recv);
+                if(decode_LSP(buffer, bytes_recv, last_seq_no, graph, total_vn)) {
+                    forward_LSP(buffer, bytes_recv, src_addr);
+                }
+            }
+        }
+
+        void forward_LSP(const char* buffer, ssize_t blen, sockaddr_in& src_addr) {
+            for(const auto& nbr: neighbours) {
+                if(nbr.cost == 0) continue;
+                if (nbr.ip_addr == src_addr.sin_addr.s_addr && nbr.UDP_Port == src_addr.sin_port) {
+                    continue;
+                }
+
+                sockaddr_in dst_addr;
+                memset(&dst_addr, 0, sizeof(dst_addr));
+                dst_addr.sin_family = AF_INET;
+                dst_addr.sin_addr.s_addr = nbr.ip_addr;
+                dst_addr.sin_port = nbr.UDP_Port;
+
+                sendto(udp_s, buffer, blen, 0, (struct sockaddr*)&dst_addr, sizeof(dst_addr));
+            }
+        }
+
+        void print_graph() {
+            cout << "Printing graph known till now...\n";
+            cout << "\t";
+            for(int i=0; i<total_vn; i++) {
+                cout << (char)(i + 'A') << "\t";
+            }
+            cout << endl;
+            for(int i=0; i<total_vn; i++) {
+                cout << "" << (char)(i + 'A') << "\t";
+                for(int j=0; j<total_vn; j++) {
+                    cout << graph[i][j] << "\t";
+                }
+                cout << '\n';
             }
         }
 };
@@ -249,6 +325,9 @@ int main(int argc, char* argv[]) {
         }
 
         VN.recv_LSP();
+        if(elapsed_sec >= 15) {
+            VN.print_graph();
+        }
     }
 
     return 0;
